@@ -8,6 +8,9 @@ from sklearn.cluster import KMeans
 from helper import assign_era
 
 
+def map_cluster_label(row):
+    return cluster_labels_map.get(row["era"], {}).get(int(row["cluster"]), f"c{row['cluster']}")
+
 per100 = pd.read_csv("data/Per 100 Poss.csv")
 
 adv = pd.read_csv("data/Advanced.csv")
@@ -83,13 +86,46 @@ features = [
     # usage/share style
     "usg_percent", "orb_percent", "drb_percent", "ast_percent", "tov_percent",
 
-    # impact-style advanced (optional—keep if you used them before)
+    # impact-style advanced
     "per", "ws_48", "obpm", "dbpm", "bpm", "vorp",
 ]
 
 
 id_cols = ["season","player_id","player","lg","age","pos"]
 IDs = master[id_cols]
+
+cluster_labels_map = {
+    "1999-2007": {
+        0: "Playmakers",
+        1: "High-Scoring Forwards",
+        2: "Floor Spacers",
+        3: "MVP",
+        4: "Defensive Centres",
+        5: "High Volume Scorers",
+        6: "Bench Big Man",
+        7: "Stretch 4 / Shooting Wing",
+    },
+    "2008-2015": {
+        0: "Big Man Defensive Stoppers",
+        1: "Bench Guards",
+        2: "MVP",
+        3: "Floor Spacers",
+        4: "Bench Centres",
+        5: "Offensive-Minded Guards",
+        6: "Bench Power Forwards",
+        7: "High Scoring Big Man",
+    },
+    "2016-present": {
+        0: "Defense First Guards",
+        1: "Inefficient Scorers",
+        2: "Offense First Guards/Wings",
+        3: "Scoring Big Men",
+        4: "MVP",
+        5: "Defense First Big Men",
+        6: "Bench Big Men",
+        7: "Defense Minded Bench Player",
+    }
+}
 
 K = 8
 era_models = {}
@@ -111,9 +147,12 @@ for era, df_era in master.groupby("era", sort=False):
 
     cluster_labels_all[idx] = labels_era
     era_models[era] = (preprocessor, km)
+    
+    
 
 master_clustered = master.copy()
 master_clustered["cluster"] = cluster_labels_all
+master_clustered["cluster_label"] = master_clustered.apply(map_cluster_label, axis=1)
 
 # HAND DEFINED LABELS FOR INTERPRETATION
 
@@ -149,16 +188,65 @@ counts = (
     .sort_values(["era", "cluster"])
 )
 
-print(counts)
+#print(counts)
 
-#master_clustered['cluster_label'] = master_clustered['cluster'].map(cluster_labels)
+# master_clustered['cluster_label'] = master_clustered['cluster'].map(cluster_labels)
 
 master_clustered.to_csv("master_clustered.csv", index=False)
 
-# import matplotlib.pyplot as plt
-# import seaborn as sns
-# from sklearn.decomposition import PCA
-# from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+
+cluster_profiles = (
+    master_clustered
+    .groupby(["era","cluster"])[features]
+    .mean()
+    .round(2)
+)
+print(cluster_profiles.T)
+
+
+for (era, cid), reps in master_clustered.groupby(["era","cluster"]):
+    reps = reps.sort_values("per", ascending=False).head(15)
+    label = cluster_labels_map.get(era, {}).get(int(cid), f"c{cid}")
+    print(f"\nEra {era} — Cluster {cid} ({label}) : Representative Players")
+    cols = [
+    "player","season",
+    "pts_per_100_poss", "fga_per_100_poss", "x3pa_per_100_poss", "fta_per_100_poss",
+    "ast_per_100_poss", "tov_per_100_poss",
+    "orb_per_100_poss", "drb_per_100_poss",
+    "stl_per_100_poss", "blk_per_100_poss", "pf_per_100_poss",
+    "fg_percent", "x3p_percent", "ft_percent", "e_fg_percent", "ts_percent",
+    "usg_percent", "orb_percent", "drb_percent", "ast_percent", "tov_percent",
+    "per", "ws_48", "obpm", "dbpm", "bpm", "vorp",
+    ]
+    print(reps[cols])
+    
+for era, df_era in master_clustered.groupby("era", sort=False):
+    prep, km = era_models[era]
+    Xz = prep.transform(df_era[features])
+
+    pca = PCA(n_components=2, random_state=0)
+    Xp = pca.fit_transform(Xz)
+
+    df_plot = pd.DataFrame({
+        "PC1": Xp[:,0],
+        "PC2": Xp[:,1],
+        "cluster": df_era["cluster"].values,
+        "cluster_label": df_era["cluster_label"].values
+    })
+
+    plt.figure(figsize=(7,5))
+    sns.scatterplot(
+        data=df_plot, x="PC1", y="PC2",
+        hue="cluster_label", palette="tab10", alpha=0.7
+    )
+    plt.title(f"PCA projection — {era}")
+    plt.legend(title="Cluster", bbox_to_anchor=(1.02, 1), loc="upper left")
+    plt.tight_layout()
+    plt.show()
 
 
 # plt.figure(figsize=(8,5))
